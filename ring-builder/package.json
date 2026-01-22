@@ -1,0 +1,21 @@
+{
+  "name": "diamond-ring-renderer",
+  "version": "1.0.0",
+  "description": "Photorealistic Three.js diamond ring head renderer",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:host": "vite --host",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "three": "^0.160.0",
+    "webgi": "https://storage.googleapis.com/dist.pixotronics.com/webgi/runtime/bundle-0.4.6.tgz"
+  },
+  "devDependencies": {
+    "@types/webgi": "https://storage.googleapis.com/dist.pixotronics.com/webgi/runtime/bundle-types-0.4.6.tgz",
+    "typescript": "^5.9.3",
+    "vite": "^5.0.11"
+  }
+}
