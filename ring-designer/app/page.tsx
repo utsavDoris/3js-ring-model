@@ -295,7 +295,7 @@ export default function RingBuilder() {
 
   // Update URL effect
   useEffect(() => {
-    const baseUrl = "https://3d-ring-builder.vercel.app/";
+    const baseUrl = "https://dev-ring-builder.vercel.app/";
 
     const shankUrl = getShankUrl(ringStyle);
     const headUrl = getHeadUrl(settingStyle, diamondShape);
