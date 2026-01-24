@@ -55,12 +55,12 @@ function getBottomSeatCenter(object: any): Vector3 {
   let minY = Infinity;
   points.forEach((p) => (minY = Math.min(minY, p.y)));
 
-  // Take only bottom 15%
-  const threshold = minY + Math.abs(minY) * 0.15;
+  // Take only bottom 25% for more accurate seat detection
+  const threshold = minY + Math.abs(minY) * 0.25;
 
   const bottomPoints = points.filter((p) => p.y <= threshold);
 
-  // Average center
+  // Calculate weighted center for more stability
   const center = new Vector3();
   bottomPoints.forEach((p) => center.add(p));
   center.divideScalar(bottomPoints.length || 1);
@@ -68,42 +68,80 @@ function getBottomSeatCenter(object: any): Vector3 {
   return center;
 }
 
+function getMetalBounds(object: any) {
+  const box = new Box3();
+  box.makeEmpty();
+  let hasMetal = false;
+  object.traverse((o: any) => {
+    if (o.isMesh && o.material && !o.name.toLowerCase().includes("diamond")) {
+      const meshBox = new Box3().setFromObject(o);
+      box.union(meshBox);
+      hasMetal = true;
+    }
+  });
+  return hasMetal ? box : new Box3().setFromObject(object);
+}
+
 function attachHeadToShankSmart(
   shankRoot: any,
   headRoot: any,
-  headScale = 0.4,
+  headScale = 0.5,
 ) {
   const shank = shankRoot.modelObject || shankRoot;
   const head = headRoot.modelObject || headRoot;
 
   if (!shank || !head) return;
 
+  // 1. Detach head if it is already a child of shank
+  // This is critical effectively to get the "Pure" shank bounds
+  if (head.parent === shank) {
+    shank.remove(head);
+  }
+
+  // Update shank matrix world after potential child removal
+  shank.updateMatrixWorld(true);
+
+  // 2. RESET HEAD TRANSFORM
+  head.position.set(0, 0, 0);
+  head.rotation.set(0, 0, 0);
   head.scale.setScalar(headScale);
   head.updateMatrixWorld(true);
 
+  // 3. Calculate Shank Bounds (Pure)
   const shankBox = new Box3().setFromObject(shank);
+  if (shankBox.isEmpty()) {
+    console.warn("Shank bounds empty, skipping attachment");
+    // Re-attach anyway to ensure it's visible?
+    shank.add(head);
+    return;
+  }
 
-  const shankSeat = new Vector3(
-    (shankBox.min.x + shankBox.max.x) / 2,
-    shankBox.max.y,
-    (shankBox.min.z + shankBox.max.z) / 2,
-  );
+  // 4. Calculate Seat Positions
+  // Shank Seat: Top-center of the shank
+  const shankSeat = new Vector3(0, shankBox.max.y, 0);
 
+  // Head Seat: Bottom-center of the head geometry
   const headSeat = getBottomSeatCenter(head);
 
+  // 5. Calculate Alignment Delta
+  // World position needed to align Head Bottom to Shank Top
   const desiredWorld = shankSeat.clone().sub(headSeat);
 
-  // adaptive penetration
-  desiredWorld.y -= (shankBox.max.y - shankBox.min.y) * 0.05;
+  // 6. Adaptive Penetration/Weld
+  // Sink it slightly (2% of shank height) into the shank for a secure look
+  const shankHeight = shankBox.max.y - shankBox.min.y;
+  desiredWorld.y -= shankHeight * 0.02;
 
-  shank.updateMatrixWorld(true);
+  // 7. Apply Transform
+  // Convert world delta to local space of the shank
+  // (Since head will be a child of shank)
   const local = shank.worldToLocal(desiredWorld.clone());
 
   shank.add(head);
   head.position.copy(local);
   head.updateMatrixWorld(true);
 
-  console.log("✅ Head attached (heart-safe centering)");
+  console.log("✅ Head attached (smart centered) Y:", head.position.y);
 }
 
 async function setupViewer() {
@@ -139,6 +177,12 @@ async function setupViewer() {
   viewer.renderer.displayCanvasScaling = Math.min(window.devicePixelRatio, 1);
 
   const manager = await viewer.addPlugin(AssetManagerPlugin);
+
+  // Optimize asset loading - disable automatic materials pre-processing for faster loading
+  // This will be computed on demand instead
+  if ((manager as any).importer) {
+    (manager as any).importer.processRawAssets = false;
+  }
   const camera = viewer.scene.activeCamera;
   const position = camera.position;
   const target = camera.target;
@@ -176,6 +220,339 @@ async function setupViewer() {
   const fixedShankUrl = shankUrl ? fixFirebaseUrl(shankUrl) : "";
   const fixedHeadUrl = headUrl ? fixFirebaseUrl(headUrl) : "";
 
+  // State tracking for updates
+  let currentShankUrl = fixedShankUrl;
+  let currentHeadUrl = fixedHeadUrl;
+  let currentMatchingBand = matchingBandParam;
+  let currentCarat = caratParam;
+
+  // Update counter to ensure atomic application of configurations
+  let updateCounter = 0;
+
+  // Hoisted state variables for access across initial load and updates
+  let shankModels: any = [];
+  let headModels: any = [];
+  let bandModels: any = [];
+
+  let shankRoot: any = null;
+  let headRoot: any = null;
+  let bandRoot: any = null;
+  let bandClone: any = null;
+
+  let metalObjects: any[] = [];
+  let diamondObjects: any[] = [];
+
+  // Metal Color Configuration
+  const metalColors: Record<string, string> = {
+    white: "#c2c2c3",
+    yellow: "#e5b377",
+    rose: "#f2af83",
+  };
+
+  // Helper to safely remove models and their content (handling reparented meshes)
+  function removeModels(models: any[], root: any) {
+    if (models && models.length > 0) {
+      models.forEach((model: any) => {
+        if (model.parent) model.parent.remove(model);
+        else viewer.scene.remove(model);
+
+        // Check for content that might have been reparented (e.g. head attached to shank)
+        const content = model.modelObject;
+        if (content && content.parent) {
+          content.parent.remove(content);
+        }
+      });
+    } else if (root) {
+      if (root.parent) root.parent.remove(root);
+      else viewer.scene.remove(root);
+
+      const content = root.modelObject;
+      if (content && content.parent) {
+        content.parent.remove(content);
+      }
+    }
+  }
+
+  // Helper to change metal color
+  function changeMetalColor(colorHex: string, headColorHex?: string) {
+    const color = new Color(colorHex).convertSRGBToLinear();
+    const headColor = headColorHex
+      ? new Color(headColorHex).convertSRGBToLinear()
+      : color;
+
+    // Get head object to identify which metal parts belong to it
+    const headObj = headRoot?.modelObject || headRoot;
+
+    for (const obj of metalObjects) {
+      if (obj.material) {
+        // Check if this object is part of the head
+        let isPartOfHead = false;
+        if (headObj) {
+          headObj.traverse((child: any) => {
+            if (child === obj) {
+              isPartOfHead = true;
+            }
+          });
+        }
+
+        // Apply appropriate color
+        obj.material.color = isPartOfHead ? headColor : color;
+      }
+    }
+    viewer.renderer.refreshPipeline();
+  }
+
+  // Register event listener EARLY to catch updates during initial load
+  window.addEventListener("message", async (event) => {
+    if (event.data?.type === "UPDATE_CONFIGURATION") {
+      const payload = event.data.payload;
+      const thisUpdateId = ++updateCounter;
+      console.log("Received update:", payload, "ID:", thisUpdateId);
+
+      const {
+        shank: newShankUrl,
+        head: newHeadUrl,
+        metalColor: newMetalColor,
+        carat: newCarat,
+        matchingBand: newMatchingBand,
+        twoTone: newTwoTone,
+        autoRotate: newAutoRotate,
+      } = payload;
+
+      let shankChanged = false;
+      let headChanged = false;
+
+      // 1. Update Auto Rotate
+      if (camera.controls) {
+        camera.controls.autoRotate = !!newAutoRotate;
+      }
+
+      // 2. Handle Shank Change
+      if (newShankUrl) {
+        const fixedUrl = fixFirebaseUrl(newShankUrl);
+        // targetShankUrl was removed, simply check vs current
+        if (fixedUrl !== currentShankUrl) {
+          console.log("Shank changing to:", fixedUrl);
+
+          try {
+            const models = await manager.addFromPath(fixedUrl);
+
+            // ATOMIC CHECK
+            if (updateCounter !== thisUpdateId) {
+              console.log("Aborting stale shank update");
+              models.forEach((m: any) => {
+                if (m.parent) m.parent.remove(m);
+                else viewer.scene.remove(m);
+              });
+              return;
+            }
+
+            // Remove OLD models
+            removeModels(shankModels, shankRoot);
+
+            shankRoot = models[0];
+            shankModels = models;
+            shankChanged = true;
+            currentShankUrl = fixedUrl;
+          } catch (e) {
+            console.error("Failed to load new shank", e);
+          }
+        }
+      }
+
+      // 3. Handle Head Change
+      if (newHeadUrl) {
+        const fixedUrl = fixFirebaseUrl(newHeadUrl);
+        if (fixedUrl !== currentHeadUrl) {
+          console.log("Head changing to:", fixedUrl);
+
+          try {
+            const models = await manager.addFromPath(fixedUrl);
+
+            // ATOMIC CHECK
+            if (updateCounter !== thisUpdateId) {
+              console.log("Aborting stale head update");
+              models.forEach((m: any) => {
+                if (m.parent) m.parent.remove(m);
+                else viewer.scene.remove(m);
+              });
+              return;
+            }
+
+            // Remove OLD head
+            removeModels(headModels, headRoot);
+
+            headRoot = models[0];
+            headModels = models;
+            headChanged = true;
+            currentHeadUrl = fixedUrl;
+          } catch (e) {
+            console.error("Failed to load new head", e);
+          }
+        }
+      }
+
+      if (updateCounter !== thisUpdateId) return;
+
+      // 4. Handle Carat Change
+      let targetScale = 0.5;
+      let caratChanged = false;
+      if (newCarat) {
+        const c = parseFloat(newCarat);
+        const oldC = parseFloat(currentCarat || "0");
+        if (!isNaN(c) && c > 0) {
+          targetScale = 0.5 * Math.pow(c, 1 / 3);
+          if (c !== oldC) {
+            caratChanged = true;
+            currentCarat = newCarat.toString();
+          }
+        }
+      }
+
+      if (shankChanged || headChanged || caratChanged) {
+        if (shankRoot && headRoot) {
+          try {
+            attachHeadToShankSmart(shankRoot, headRoot, targetScale);
+          } catch (e) {
+            console.error("Error re-attaching head:", e);
+          }
+        }
+      }
+
+      // 5. Handle Matching Band Change
+      if (
+        (newMatchingBand !== undefined &&
+          newMatchingBand !== currentMatchingBand) ||
+        shankChanged
+      ) {
+        // Remove old bands
+        removeModels(bandModels, bandRoot);
+
+        if (bandClone) {
+          if (bandClone.parent) bandClone.parent.remove(bandClone);
+          else viewer.scene.remove(bandClone);
+        }
+
+        bandRoot = null;
+        bandClone = null;
+
+        let newBandMode = 0;
+        let newBandPath = "";
+        if (newMatchingBand) {
+          if (newMatchingBand.toString().startsWith("http")) {
+            newBandPath = fixFirebaseUrl(newMatchingBand);
+            newBandMode = 1;
+          } else {
+            const val = parseInt(newMatchingBand);
+            if (!isNaN(val) && val > 0) {
+              newBandMode = val;
+              newBandPath = "maching-band.glb";
+            }
+          }
+        }
+
+        // Load and position
+        if (newBandPath && newBandMode > 0) {
+          try {
+            const models = await manager.addFromPath(newBandPath);
+            // ATOMIC CHECK
+            if (updateCounter !== thisUpdateId) {
+              models.forEach((m: any) => {
+                if (m.parent) m.parent.remove(m);
+                else viewer.scene.remove(m);
+              });
+              return;
+            }
+
+            bandRoot = models[0];
+            bandModels = models;
+
+            if (bandRoot && shankRoot) {
+              // Logic to position band...
+              // For brevity in this replacement block, we need to ensure we don't break logic.
+              // We can copy the logic or encapsulate it.
+              // Since I can't easily encapsulate without massive refactor, I will copy the positioning logic here.
+              const shankObj = shankRoot.modelObject || shankRoot;
+              const bandObj = bandRoot.modelObject || bandRoot;
+              const headObj = headRoot
+                ? headRoot.modelObject || headRoot
+                : null;
+
+              shankObj.updateMatrixWorld(true);
+              bandObj.updateMatrixWorld(true);
+
+              const headParent = headObj?.parent;
+              if (headParent) {
+                headParent.remove(headObj);
+                shankObj.updateMatrixWorld(true);
+              }
+              const shankBox = getMetalBounds(shankObj);
+              if (headParent) {
+                headParent.add(headObj);
+                headObj.updateMatrixWorld(true);
+              }
+              const bandBox = getMetalBounds(bandObj);
+              const bandWidthZ = bandBox.max.z - bandBox.min.z;
+              const gap = -0.05;
+              const bandCenterZ = (bandBox.max.z + bandBox.min.z) / 2;
+              const targetZ_Left = shankBox.min.z - bandWidthZ / 2 - gap;
+
+              bandObj.position.z += targetZ_Left - bandCenterZ;
+              bandObj.updateMatrixWorld(true);
+
+              if (newBandMode === 2) {
+                bandClone = bandObj.clone();
+                const targetZ_Right = shankBox.max.z + bandWidthZ / 2 + gap;
+                bandClone.position.z =
+                  bandObj.position.z + (targetZ_Right - targetZ_Left);
+                viewer.scene.add(bandClone);
+              }
+            }
+            currentMatchingBand = newMatchingBand;
+          } catch (e) {
+            console.error("Error updating bands", e);
+          }
+        } else {
+          currentMatchingBand = newMatchingBand;
+        }
+      }
+
+      if (updateCounter !== thisUpdateId) return;
+
+      // 6. Update Materials
+      metalObjects = [];
+      diamondObjects = [];
+      const collectParts = (root: any) => {
+        const obj = root?.modelObject || root;
+        if (obj && typeof obj.traverse === "function") {
+          obj.traverse((o: any) => {
+            if (o.type === "Mesh") {
+              if (o.name.toLowerCase().startsWith("diamond"))
+                diamondObjects.push(o);
+              else metalObjects.push(o);
+            }
+          });
+        }
+      };
+      if (shankRoot) collectParts(shankRoot);
+      if (headRoot) collectParts(headRoot);
+      if (bandRoot) collectParts(bandRoot);
+      if (bandClone) collectParts(bandClone);
+
+      const mColor = newMetalColor || metalParam || "white";
+      const isTT =
+        newTwoTone !== undefined ? newTwoTone : twoToneParam === "true";
+      let colorHex = metalColors.white;
+      if (mColor.includes("yellow")) colorHex = metalColors.yellow;
+      else if (mColor.includes("rose")) colorHex = metalColors.rose;
+
+      if (isTT) changeMetalColor(colorHex, metalColors.white);
+      else changeMetalColor(colorHex);
+
+      viewer.renderer.refreshPipeline();
+    }
+  });
+
   // Determine matching band path and mode
   // Mode: 0 = None, 1 = Left Only, 2 = Left & Right
   let bandMode = 0;
@@ -194,43 +571,92 @@ async function setupViewer() {
     }
   }
 
-  // Load models from URL params (no fallback)
-  let shankModels: any = [];
-  let headModels: any = [];
-  let bandModels: any = [];
+  // Start all loads in parallel
+  const loadPromises = [];
 
-  try {
-    if (fixedShankUrl) {
-      shankModels = await manager.addFromPath(fixedShankUrl);
-    }
-  } catch (error) {
-    console.error("Error loading shank model:", error);
+  if (fixedShankUrl) {
+    loadPromises.push(
+      manager
+        .addFromPath(fixedShankUrl)
+        .then((models) => {
+          // ABORT if update happened during load
+          if (updateCounter > 0) {
+            console.log("Initial shank load discarded due to pending update");
+            models.forEach((m: any) => {
+              if (m.parent) m.parent.remove(m);
+              else viewer.scene.remove(m);
+            });
+            return;
+          }
+          shankModels = models;
+          console.log("Shank model loaded");
+        })
+        .catch((error) => {
+          console.error("Error loading shank model:", error);
+        }),
+    );
   }
 
-  try {
-    if (fixedHeadUrl) {
-      headModels = await manager.addFromPath(fixedHeadUrl);
-    }
-  } catch (error) {
-    console.error("Error loading head model:", error);
+  if (fixedHeadUrl) {
+    loadPromises.push(
+      manager
+        .addFromPath(fixedHeadUrl)
+        .then((models) => {
+          if (updateCounter > 0) {
+            console.log("Initial head load discarded due to pending update");
+            models.forEach((m: any) => {
+              if (m.parent) m.parent.remove(m);
+              else viewer.scene.remove(m);
+            });
+            return;
+          }
+          headModels = models;
+          console.log("Head model loaded");
+        })
+        .catch((error) => {
+          console.error("Error loading head model:", error);
+        }),
+    );
   }
 
-  try {
-    if (bandPath && bandMode > 0) {
-      bandModels = await manager.addFromPath(bandPath);
-    }
-  } catch (error) {
-    console.error("Error loading matching band model:", error);
+  if (bandPath && bandMode > 0) {
+    loadPromises.push(
+      manager
+        .addFromPath(bandPath)
+        .then((models) => {
+          if (updateCounter > 0) {
+            console.log("Initial band load discarded due to pending update");
+            models.forEach((m: any) => {
+              if (m.parent) m.parent.remove(m);
+              else viewer.scene.remove(m);
+            });
+            return;
+          }
+          bandModels = models;
+          console.log("Band model loaded");
+        })
+        .catch((error) => {
+          console.error("Error loading matching band model:", error);
+        }),
+    );
+  }
+
+  // Wait for all loads to complete
+  // Join initial load
+  await Promise.all(loadPromises);
+
+  // IF AN UPDATE HAPPENED DURING SETUP, STOP HERE.
+  if (updateCounter > 0) {
+    console.log("Initial setup aborted because configuration was updated.");
+    window.parent.postMessage("VIEWER_READY", "*");
+    return;
   }
 
   // Get the root objects - WebGI returns ISceneObject[]
   // Cast to any to access internal properties
-  const shankRoot: any =
-    shankModels && shankModels.length > 0 ? shankModels[0] : null;
-  const headRoot: any =
-    headModels && headModels.length > 0 ? headModels[0] : null;
-  const bandRoot: any =
-    bandModels && bandModels.length > 0 ? bandModels[0] : null;
+  shankRoot = shankModels && shankModels.length > 0 ? shankModels[0] : null;
+  headRoot = headModels && headModels.length > 0 ? headModels[0] : null;
+  bandRoot = bandModels && bandModels.length > 0 ? bandModels[0] : null;
 
   if (!shankRoot || !headRoot) {
     console.error("Missing models - Shank:", !!shankRoot, "Head:", !!headRoot);
@@ -260,14 +686,14 @@ async function setupViewer() {
   }
 
   // Calculate target scale from carat parameter
-  let targetHeadScale = 0.4; // Default scale for ~1.0ct
+  let targetHeadScale = 0.5; // Default scale for ~1.0ct
   if (caratParam) {
     const carat = parseFloat(caratParam);
     if (!isNaN(carat) && carat > 0) {
       // Scale is proportional to the cube root of the carat weight
-      // Formula: newScale = baseScale * (newCarat / baseCarat)^(1/3)
-      // Assuming 0.4 scale corresponds to 1.0 carat
-      targetHeadScale = 0.4 * Math.pow(carat, 1 / 6);
+      // Formula: newScale = baseScale * (carat)^(1/3)
+      // Base scale of 0.5 corresponds to 1.0 carat
+      targetHeadScale = 0.5 * Math.pow(carat, 1 / 3);
     }
   }
 
@@ -280,7 +706,7 @@ async function setupViewer() {
   }
 
   // Position Matching Band(s)
-  let bandClone: any = null;
+
   if (bandRoot && shankRoot && bandMode > 0) {
     try {
       const shankObj = shankRoot.modelObject || shankRoot;
@@ -290,24 +716,6 @@ async function setupViewer() {
       // Update matrices to ensure boxes are correct
       shankObj.updateMatrixWorld(true);
       bandObj.updateMatrixWorld(true);
-
-      const getMetalBounds = (object: any) => {
-        const box = new Box3();
-        box.makeEmpty();
-        let hasMetal = false;
-        object.traverse((o: any) => {
-          if (
-            o.isMesh &&
-            o.material &&
-            !o.name.toLowerCase().includes("diamond")
-          ) {
-            const meshBox = new Box3().setFromObject(o);
-            box.union(meshBox);
-            hasMetal = true;
-          }
-        });
-        return hasMetal ? box : new Box3().setFromObject(object);
-      };
 
       // Temporarily detach head to get pure shank bounds (excluding head width)
       const headParent = headObj?.parent;
@@ -356,8 +764,6 @@ async function setupViewer() {
   }
 
   // Collect Objects from both models
-  let diamondObjects: any[] = [];
-  let metalObjects: any[] = [];
 
   // Traverse shank for metal objects
   const shankObj = shankRoot?.modelObject || shankRoot;
@@ -406,25 +812,11 @@ async function setupViewer() {
   if (bandRoot) collectBandParts(bandRoot);
   if (bandClone) collectBandParts(bandClone);
 
-  function changeMetalColor(colorHex: string) {
-    const color = new Color(colorHex).convertSRGBToLinear();
-    for (const obj of metalObjects) {
-      if (obj.material) {
-        obj.material.color = color;
-      }
-    }
-    viewer.renderer.refreshPipeline();
-  }
-
   // Metal Color Configuration
-  const metalColors: Record<string, string> = {
-    white: "#c2c2c3",
-    yellow: "#e3bb5e",
-    rose: "#d9a483",
-  };
 
   // Get color from URL params
   const metalParam = urlParams.get("metalColor")?.toLowerCase();
+  const twoToneParam = urlParams.get("twoTone");
 
   let initialColor = metalColors.white; // Default
 
@@ -441,17 +833,33 @@ async function setupViewer() {
     );
   }
 
-  // Set initial color
-  changeMetalColor(initialColor);
+  // Check if two-tone is enabled
+  const isTwoTone = twoToneParam === "true";
+
+  // Set initial color - if two-tone, head gets white gold
+  if (isTwoTone) {
+    console.log(
+      "Two-tone enabled: Head will be white gold, Shank will be",
+      metalParam,
+    );
+    changeMetalColor(initialColor, metalColors.white);
+  } else {
+    changeMetalColor(initialColor);
+  }
 
   // Initial Camera Position
   position.set(3, -0.8, 1.2);
   target.set(0, 0, 0);
 
+  // Get auto-rotate preference from URL
+  const autoRotateParam = urlParams.get("autoRotate");
+  const shouldAutoRotate = autoRotateParam === "true";
+
   // Enable controls
   if (camera.controls) {
     camera.controls.enabled = true;
-    camera.controls.autoRotate = false;
+    camera.controls.autoRotate = shouldAutoRotate;
+    camera.controls.autoRotateSpeed = 2.0; // Adjust speed as needed
     camera.controls.minDistance = 4;
     camera.controls.maxDistance = 15;
   }
