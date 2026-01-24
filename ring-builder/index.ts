@@ -10,7 +10,7 @@ import {
   AssetImporter,
   Color,
 } from "webgi";
-import { Box3, Vector3 } from "three";
+import { Box3, Vector3, Raycaster } from "three";
 // Ensure global styles are imported
 import "./style.css";
 
@@ -83,6 +83,70 @@ function getMetalBounds(object: any) {
   return hasMetal ? box : new Box3().setFromObject(object);
 }
 
+function getShankTopCenter(object: any, fallbackY: number): Vector3 {
+  const meshes: any[] = [];
+  object.traverse((o: any) => {
+    if (o.isMesh && o.material && !o.name.toLowerCase().includes("diamond")) {
+      meshes.push(o);
+    }
+  });
+
+  const raycaster = new Raycaster();
+  const originY = 50;
+  raycaster.ray.direction.set(0, -1, 0);
+
+  // 1. PRIORITY SCAN: Exact Center (X=0, Z=0)
+  // This is critical for Cathedral settings where shoulders are higher than the bridge.
+  // We want the bridge height, which is assumed to be at X=0.
+  raycaster.ray.origin.set(0, originY, 0);
+  const hits0 = raycaster.intersectObjects(meshes, false);
+  const validHits0 = hits0.filter((h) => h.point.y > 0);
+
+  if (validHits0.length > 0) {
+    // Found center bridge!
+    console.log(
+      "✅ Shank Top detected (Center Priority) at Y:",
+      validHits0[0].point.y,
+    );
+    return new Vector3(0, validHits0[0].point.y, 0);
+  }
+
+  // 2. FALLBACK SCAN: Offsets
+  // If X=0 hit nothing (e.g. Split shank with gap), scan sides
+  const offsets = [-0.1, 0.1, -0.25, 0.25, -0.5, 0.5];
+
+  let maxHitY = -Infinity;
+  let hitFound = false;
+
+  for (const xOff of offsets) {
+    raycaster.ray.origin.set(xOff, originY, 0); // Scan along Z=0 centerline
+    const hits = raycaster.intersectObjects(meshes, false);
+    // Filter hits: must be top half of ring (Y > 0)
+    const validHits = hits.filter((h) => h.point.y > 0);
+
+    if (validHits.length > 0) {
+      // hits are sorted by distance (closest first = highest Y)
+      const y = validHits[0].point.y;
+      if (y > maxHitY) {
+        maxHitY = y;
+        hitFound = true;
+      }
+    }
+  }
+
+  if (hitFound) {
+    console.log("✅ Shank Bridge detected (Offset Scan) at Y:", maxHitY);
+    // Return the height we found, but force X/Z to 0 for perfect centering
+    return new Vector3(0, maxHitY, 0);
+  }
+
+  console.warn(
+    "⚠️ No center bridge found (Multi-Scan Failed), using fallback:",
+    fallbackY,
+  );
+  return new Vector3(0, fallbackY, 0);
+}
+
 function attachHeadToShankSmart(
   shankRoot: any,
   headRoot: any,
@@ -111,6 +175,13 @@ function attachHeadToShankSmart(
   // Update shank matrix world after potential child removal
   shank.updateMatrixWorld(true);
 
+  // 1.5. DETACH HEAD from any parent
+  // This ensures we measure the head in its canonical state (World Identity),
+  // free from any previous parent's transform (e.g. a rotated Shank from a previous selection).
+  if (head.parent) {
+    head.parent.remove(head);
+  }
+
   // 2. RESET HEAD TRANSFORM
   head.position.set(0, 0, 0);
   head.rotation.set(0, 0, 0);
@@ -127,8 +198,8 @@ function attachHeadToShankSmart(
   }
 
   // 4. Calculate Seat Positions
-  // Shank Seat: Top-center of the shank
-  const shankSeat = new Vector3(0, shankBox.max.y, 0);
+  // Shank Seat: Top-center of the shank (Use specific geometric center to avoid shoulders)
+  const shankSeat = getShankTopCenter(shank, shankBox.max.y);
 
   // Head Seat: Bottom-center of the head geometry
   const headSeat = getBottomSeatCenter(head);
@@ -138,9 +209,10 @@ function attachHeadToShankSmart(
   const desiredWorld = shankSeat.clone().sub(headSeat);
 
   // 6. Adaptive Penetration/Weld
-  // Sink it slightly (1% of shank height) into the shank for a secure look
+  // Sink it slightly (1.5% of shank height or minimum 0.15 units) into the shank for a secure look
   const shankHeight = shankBox.max.y - shankBox.min.y;
-  desiredWorld.y -= shankHeight * 0.01;
+  const sink = Math.max(shankHeight * 0.015, 0.15);
+  desiredWorld.y -= sink;
 
   // 7. Apply Transform
   // Convert world delta to local space of the shank
@@ -286,7 +358,7 @@ async function setupViewer() {
   function refreshRingAssembly() {
     console.log("Refreshing ring assembly...");
     if (shankRoot && headRoot) {
-      const targetScale = 0.4 * Math.pow(currentCaratVal || 1.0, 1 / 3);
+      const targetScale = 0.4 * Math.pow(currentCaratVal || 1.0, 1 / 10);
       try {
         attachHeadToShankSmart(shankRoot, headRoot, targetScale);
       } catch (e) {
