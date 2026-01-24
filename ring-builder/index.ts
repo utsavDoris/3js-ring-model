@@ -85,7 +85,7 @@ function getMetalBounds(object: any) {
 function attachHeadToShankSmart(
   shankRoot: any,
   headRoot: any,
-  headScale = 0.5,
+  headScale = 0.4,
 ) {
   const shank = shankRoot.modelObject || shankRoot;
   const head = headRoot.modelObject || headRoot;
@@ -395,13 +395,13 @@ async function setupViewer() {
       if (updateCounter !== thisUpdateId) return;
 
       // 4. Handle Carat Change
-      let targetScale = 0.5;
+      let targetScale = 0.4;
       let caratChanged = false;
       if (newCarat) {
         const c = parseFloat(newCarat);
         const oldC = parseFloat(currentCarat || "0");
         if (!isNaN(c) && c > 0) {
-          targetScale = 0.5 * Math.pow(c, 1 / 3);
+          targetScale = 0.4 * Math.pow(c, 1 / 3);
           if (c !== oldC) {
             caratChanged = true;
             currentCarat = newCarat.toString();
@@ -686,14 +686,14 @@ async function setupViewer() {
   }
 
   // Calculate target scale from carat parameter
-  let targetHeadScale = 0.5; // Default scale for ~1.0ct
+  let targetHeadScale = 0.4; // Default scale for ~1.0ct
   if (caratParam) {
     const carat = parseFloat(caratParam);
     if (!isNaN(carat) && carat > 0) {
       // Scale is proportional to the cube root of the carat weight
       // Formula: newScale = baseScale * (carat)^(1/3)
-      // Base scale of 0.5 corresponds to 1.0 carat
-      targetHeadScale = 0.5 * Math.pow(carat, 1 / 3);
+      // Base scale of 0.4 corresponds to 1.0 carat
+      targetHeadScale = 0.4 * Math.pow(carat, 1 / 3);
     }
   }
 
