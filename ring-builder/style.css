@@ -92,6 +92,72 @@ body {
   }
 }
 
+/* Model Loader (Top Center) */
+#model-loader {
+  position: fixed;
+  top: 80px; /* Below the powered-by logo slightly, or center if preferred. User asked Top Center. */
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 50;
+  background: rgba(255, 255, 255, 0.9);
+  padding: 10px 20px;
+  border-radius: 9999px;
+  box-shadow:
+    0 4px 6px -1px rgba(0, 0, 0, 0.1),
+    0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 1; /* Default visible if no hidden class */
+  transition:
+    opacity 0.3s ease,
+    transform 0.3s ease;
+  pointer-events: none; /* Let clicks pass through */
+}
+
+/* Adjust top position to not overlap with logo if needed, but top center is usually free. 
+   The logo is top: 24px, left: 24px. So top center is fine. 
+   Let's create a nice entrance animation effect too.
+*/
+#model-loader.hidden {
+  opacity: 0;
+  transform: translateX(-50%) translateY(-10px);
+}
+
+.dot-loader {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.dot-loader span {
+  width: 8px;
+  height: 8px;
+  background-color: #d4af37; /* Accent Gold to match theme */
+  border-radius: 50%;
+  display: inline-block;
+  animation: bounce 1.4s infinite ease-in-out both;
+}
+
+.dot-loader span:nth-child(1) {
+  animation-delay: -0.32s;
+}
+
+.dot-loader span:nth-child(2) {
+  animation-delay: -0.16s;
+}
+
+@keyframes bounce {
+  0%,
+  80%,
+  100% {
+    transform: scale(0);
+  }
+  40% {
+    transform: scale(1);
+  }
+}
+
 #error-message {
   position: fixed;
   top: 0;

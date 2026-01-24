@@ -307,7 +307,7 @@ export default function RingBuilder() {
   // Update effect
   useEffect(() => {
     // const baseUrl = "https://3d-ring-builder.vercel.app/";
-    const baseUrl = "http://localhost:5173/";
+    const baseUrl = "http://192.168.29.247:5173/";
 
     const shankUrl = getShankUrl(ringStyle);
     const headUrl = getHeadUrl(settingStyle, diamondShape);
