@@ -392,7 +392,7 @@ async function setupViewer() {
 
         const bandBox = getMetalBounds(bandObj);
         const bandWidthZ = bandBox.max.z - bandBox.min.z;
-        const gap = -0.05;
+        const gap = 0.0; // Ensure they touch exactly
 
         // Positioning logic
         const bandCenterZ = (bandBox.max.z + bandBox.min.z) / 2;
@@ -551,7 +551,6 @@ async function setupViewer() {
           }
         }
       }
-
       if (newHeadUrl) {
         const fixedUrl = fixFirebaseUrl(newHeadUrl);
         if (fixedUrl !== currentHeadUrl) {
@@ -576,7 +575,11 @@ async function setupViewer() {
           }
         }
       }
-
+      console.log(
+        newMatchingBand !== undefined &&
+          newMatchingBand !== currentMatchingBand,
+        "newMatchingBand",
+      );
       if (
         newMatchingBand !== undefined &&
         newMatchingBand !== currentMatchingBand
@@ -585,13 +588,9 @@ async function setupViewer() {
         const val = newMatchingBand.toString();
         let mode = 0;
         let path = "";
-        if (val.startsWith("http")) {
-          path = fixFirebaseUrl(val);
-          mode = 1;
-        } else {
-          mode = parseInt(val);
-          path = mode > 0 ? "maching-band.glb" : "";
-        }
+
+        mode = parseInt(val);
+        path = mode > 0 ? "maching-band.glb" : "";
         currentMatchingBand = newMatchingBand;
         if (path) {
           showModelLoader();

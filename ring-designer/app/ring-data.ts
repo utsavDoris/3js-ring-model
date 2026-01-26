@@ -86,13 +86,10 @@ export const HEAD_DATA = [
     shape: "Round",
     url: "https://firebasestorage.googleapis.com/v0/b/qa-ultimate-jewelry.firebasestorage.app/o/compress-ring-builder%2Fhead%2FHIDDEN%20HALO_ROUND_1.5CT.glb?alt=media&token=b99782ce-f416-4201-a036-2024b92dbbc6",
   },
-
   // Basket Set
-  // { setting: "Basket Set", shape: "Asscher", url: '' },
-  // { setting: "Basket Set", shape: "Heart", url: '' },
   {
     setting: "Basket Set",
     shape: "Oval",
-    url: "https://firebasestorage.googleapis.com/v0/b/qa-ultimate-jewelry.firebasestorage.app/o/compress-ring-builder%2Fhead%2FBASKET_SET_OVAL_3CT.glb?alt=media&token=a6ff525b-21e2-434e-923d-c947b98a6361",
+    url: "https://firebasestorage.googleapis.com/v0/b/qa-ultimate-jewelry.firebasestorage.app/o/testing-ring-builder%2Fhead%2FBASKET_SET_OVAL_3CT.glb?alt=media&token=2ee89d7b-0bde-4ea5-9619-3bb3a4191f36",
   },
 ];

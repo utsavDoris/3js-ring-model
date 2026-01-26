@@ -195,7 +195,12 @@ import {
 // Helper functions to get URLs based on selection
 const getShankUrl = (ringStyle: RingStyle): string => {
   const match = SHANK_DATA.find((item) => item.style === ringStyle);
-  return match ? match.url : DEFAULT_SHANK_URL;
+  if (match) {
+    console.log(`[Shank] Found match for ${ringStyle}:`, match.url);
+    return match.url;
+  }
+  console.warn(`[Shank] No match for ${ringStyle}, using default.`);
+  return DEFAULT_SHANK_URL;
 };
 
 // Check if a specific combination exists in the valid data matches both the CONFIG and the HEAD_DATA
@@ -225,9 +230,11 @@ const getHeadUrl = (setting: SettingStyle, shape: DiamondShape): string => {
   );
 
   if (match) {
+    console.log(`[Head] Found match for ${setting} + ${shape}:`, match.url);
     return match.url;
   }
 
+  console.warn(`[Head] No match for ${setting} + ${shape}, using default.`);
   return DEFAULT_HEAD_URL;
 };
 
@@ -318,6 +325,18 @@ export default function RingBuilder() {
         `${baseUrl}?shank=${shankUrl}&head=${headUrl}&metalColor=${metalParam}&carat=${carat}&matchingBand=${matchingBand}&twoTone=${twoTone}&autoRotate=${autoRotate}`,
       );
     } else {
+      // Only send update if the combination is valid
+      // This prevents sending "Default Head" during the transient state where
+      // settingStyle has changed but diamondShape hasn't been auto-corrected yet.
+      if (!isCombinationAvailable(ringStyle, settingStyle, diamondShape)) {
+        console.warn(
+          "[Update] Skipping update for invalid combination:",
+          settingStyle,
+          diamondShape,
+        );
+        return;
+      }
+
       // Send post message for instant updates
       if (iframeRef.current && iframeRef.current.contentWindow) {
         iframeRef.current.contentWindow.postMessage(
