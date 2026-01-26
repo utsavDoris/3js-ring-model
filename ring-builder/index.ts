@@ -374,6 +374,18 @@ async function setupViewer() {
 
         // Ensure matrices are fresh
         shankObj.updateMatrixWorld(true);
+
+        // Reset band to origin to measure native bounds correctly
+        bandObj.position.set(0, 0, 0);
+        bandObj.rotation.set(0, 0, 0);
+        bandObj.scale.setScalar(1.0); // Reset scale to 1 to measure?
+        // WARNING: If we reset scale, we lose the scale check/set in Update.
+        // The Update logic "If < 0.001 set 1.0" handles tiny models.
+        // If the model is naturally correct scale, we shouldn't force 1.0 if it was something else?
+        // But Update sets it to 1.0. Let's assume 1.0 is desired or preserve current.
+        // Better: Don't reset scale, just position/rotation.
+        // Actually, rotation should probably be identity for "touch" logic if we assume axis aligned.
+
         bandObj.updateMatrixWorld(true);
 
         // Temporarily detach head for pure shank bounds
@@ -391,24 +403,31 @@ async function setupViewer() {
         }
 
         const bandBox = getMetalBounds(bandObj);
-        const bandWidthZ = bandBox.max.z - bandBox.min.z;
-        const gap = 0.0; // Ensure they touch exactly
 
-        // Positioning logic
-        const bandCenterZ = (bandBox.max.z + bandBox.min.z) / 2;
-        const targetZ_Left = shankBox.min.z - bandWidthZ / 2 - gap;
+        // Gap: 0 implies touching.
+        const gap = 0.0;
 
-        // Use relative move to avoid accumulation errors
-        const offsetLeft = targetZ_Left - bandCenterZ;
-        bandObj.position.z += offsetLeft;
+        // Band 1 (Left Side): touches Shank Minimum Z
+        // Band Max Z should equal (Shank Min Z - gap)
+        // Position Shift = (Shank Min Z - gap) - Band Max Z;
+        // Since Band is at 0, Shift is the new Position Z.
+        const targetZ_Left = shankBox.min.z - bandBox.max.z - gap;
+        bandObj.position.z = targetZ_Left;
         bandObj.updateMatrixWorld(true);
 
-        // If Band 2 exists, position it relative to the now-positioned Band 1
+        // Band 2 (Right Side)
         if (bandClone) {
-          const targetZ_Right = shankBox.max.z + bandWidthZ / 2 + gap;
-          // Position relative to Band 1 (which is at targetZ_Left)
-          bandClone.position.z =
-            bandObj.position.z + (targetZ_Right - targetZ_Left);
+          // Reset clone to match base band properties (except position which we calculate)
+          bandClone.scale.copy(bandObj.scale);
+          bandClone.rotation.copy(bandObj.rotation);
+          bandClone.position.set(0, 0, 0);
+          bandClone.updateMatrixWorld(true);
+
+          // Band 2 touches Shank Maximum Z
+          // Band Min Z should equal (Shank Max Z + gap)
+          // Position Shift = (Shank Max Z + gap) - Band Min Z
+          const targetZ_Right = shankBox.max.z - bandBox.min.z + gap;
+          bandClone.position.z = targetZ_Right;
           bandClone.updateMatrixWorld(true);
         }
       } catch (e) {
@@ -584,53 +603,95 @@ async function setupViewer() {
         newMatchingBand !== undefined &&
         newMatchingBand !== currentMatchingBand
       ) {
-        const thisId = ++bandUpdateId;
         const val = newMatchingBand.toString();
-        let mode = 0;
-        let path = "";
+        const mode = parseInt(val);
+        const path = mode > 0 ? "maching-band.glb" : "";
 
-        mode = parseInt(val);
-        path = mode > 0 ? "maching-band.glb" : "";
+        // Check if we can purely toggle visibility/clones without reloading using current state
+        const oldVal = (currentMatchingBand || "0").toString();
+        const oldMode = parseInt(oldVal);
+        const oldPath = oldMode > 0 ? "maching-band.glb" : "";
+        const isSameModel = path === oldPath && path !== "" && bandRoot;
+
         currentMatchingBand = newMatchingBand;
-        if (path) {
-          showModelLoader();
-          try {
-            const models = await manager.addFromPath(path);
-            if (thisId !== bandUpdateId) removeModels(models, null);
-            else {
-              removeModels(bandModels, bandRoot);
-              if (bandClone) {
-                viewer.scene.remove(bandClone);
-                bandClone = null;
-              }
-              bandModels = models;
-              bandRoot = models[0];
-              const bObj = bandRoot.modelObject || bandRoot;
-              bObj.visible = true;
-              if (bObj.scale.length() < 0.001) bObj.scale.setScalar(1.0);
 
-              if (mode === 2 && bandRoot) {
-                bandClone = bObj.clone();
-                viewer.scene.add(bandClone);
-              }
-              changedModels = true;
-              refreshRingAssembly();
-              refreshRingMaterials();
-            }
-          } catch (e) {
-            console.error("Band load error", e);
-          } finally {
-            hideModelLoader();
-          }
-        } else {
-          removeModels(bandModels, bandRoot);
-          if (bandClone) {
+        if (isSameModel) {
+          console.log(
+            "Quick switching band mode (no reload):",
+            oldMode,
+            "->",
+            mode,
+          );
+          // Toggle Clone for Mode 2
+          if (mode === 2 && !bandClone) {
+            const bObj = bandRoot.modelObject || bandRoot;
+            bandClone = bObj.clone();
+            viewer.scene.add(bandClone);
+          } else if (mode !== 2 && bandClone) {
             viewer.scene.remove(bandClone);
             bandClone = null;
           }
-          bandRoot = null;
           changedModels = true;
+          refreshRingAssembly();
           refreshRingMaterials();
+        } else {
+          // Full Load or Clear Required
+          const thisId = ++bandUpdateId;
+          if (path) {
+            showModelLoader();
+            try {
+              const models = await manager.addFromPath(path);
+              if (thisId !== bandUpdateId) removeModels(models, null);
+              else {
+                // IMPORTANT: If models comes from cache, it might be strictly equal to bandModels
+                // if we didn't clear bandModels properly.
+                if (bandModels !== models) {
+                  removeModels(bandModels, bandRoot);
+                }
+
+                if (bandClone) {
+                  viewer.scene.remove(bandClone);
+                  bandClone = null;
+                }
+
+                bandModels = models;
+                bandRoot = models[0];
+                const bObj = bandRoot.modelObject || bandRoot;
+
+                // Ensure it is added to the scene (in case cache returned detached objects)
+                // AssetManager usually adds to scene, but just to be safe if we removed it:
+                if (!bObj.parent) {
+                  viewer.scene.add(bandRoot);
+                }
+
+                bObj.visible = true;
+                if (bObj.scale.length() < 0.001) bObj.scale.setScalar(1.0);
+
+                if (mode === 2 && bandRoot) {
+                  bandClone = bObj.clone();
+                  viewer.scene.add(bandClone);
+                }
+                changedModels = true;
+                refreshRingAssembly();
+                refreshRingMaterials();
+              }
+            } catch (e) {
+              console.error("Band load error", e);
+            } finally {
+              hideModelLoader();
+            }
+          } else {
+            removeModels(bandModels, bandRoot);
+            if (bandClone) {
+              viewer.scene.remove(bandClone);
+              bandClone = null;
+            }
+            bandRoot = null;
+            bandModels = []; // Clear reference to prevent accidental removal on reload
+            changedModels = true;
+            refreshRingAssembly();
+            refreshRingMaterials();
+          }
         }
       }
 

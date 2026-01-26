@@ -328,6 +328,10 @@ export default function RingBuilder() {
       // Only send update if the combination is valid
       // This prevents sending "Default Head" during the transient state where
       // settingStyle has changed but diamondShape hasn't been auto-corrected yet.
+      // Remove blocking check to ensure Band updates (and others) are sent
+      // even if the Ring/Setting/Shape combination is transiently invalid.
+      // The viewer handles default fallbacks safely.
+      /*
       if (!isCombinationAvailable(ringStyle, settingStyle, diamondShape)) {
         console.warn(
           "[Update] Skipping update for invalid combination:",
@@ -336,6 +340,7 @@ export default function RingBuilder() {
         );
         return;
       }
+      */
 
       // Send post message for instant updates
       if (iframeRef.current && iframeRef.current.contentWindow) {
