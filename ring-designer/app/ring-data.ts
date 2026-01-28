@@ -1,8 +1,3 @@
-export const DEFAULT_SHANK_URL =
-  "https://firebasestorage.googleapis.com/v0/b/qa-ultimate-jewelry.firebasestorage.app/o/ring-models%2Fshank-i-jewel.glb?alt=media&token=adc12af6-f076-478f-a60d-bf7cc443d5ab";
-export const DEFAULT_HEAD_URL =
-  "https://firebasestorage.googleapis.com/v0/b/qa-ultimate-jewelry.firebasestorage.app/o/ring-models%2Fhead-i-jewel.glb?alt=media&token=a824e84f-3d47-430c-9934-cee145b0ffb2";
-
 export const SHANK_DATA = [
   {
     style: "Solitaire Shank",

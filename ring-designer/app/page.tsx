@@ -51,7 +51,6 @@ const DIAMOND_SHAPE_OPTIONS = [
   { label: "Pear", value: "Pear" as DiamondShape },
   { label: "Princess", value: "Princess" as DiamondShape },
   { label: "Radiant", value: "Radiant" as DiamondShape },
-  { label: "Round", value: "Round" as DiamondShape },
 ];
 
 const CARAT_OPTIONS = [
@@ -185,12 +184,7 @@ const RING_STYLE_CONFIG: Record<
   },
 };
 
-import {
-  SHANK_DATA,
-  HEAD_DATA,
-  DEFAULT_SHANK_URL,
-  DEFAULT_HEAD_URL,
-} from "./ring-data";
+import { SHANK_DATA, HEAD_DATA } from "./ring-data";
 
 // Helper functions to get URLs based on selection
 const getShankUrl = (ringStyle: RingStyle): string => {
@@ -199,8 +193,8 @@ const getShankUrl = (ringStyle: RingStyle): string => {
     console.log(`[Shank] Found match for ${ringStyle}:`, match.url);
     return match.url;
   }
-  console.warn(`[Shank] No match for ${ringStyle}, using default.`);
-  return DEFAULT_SHANK_URL;
+  console.warn(`[Shank] No match for ${ringStyle}`);
+  return "";
 };
 
 // Check if a specific combination exists in the valid data matches both the CONFIG and the HEAD_DATA
@@ -234,8 +228,8 @@ const getHeadUrl = (setting: SettingStyle, shape: DiamondShape): string => {
     return match.url;
   }
 
-  console.warn(`[Head] No match for ${setting} + ${shape}, using default.`);
-  return DEFAULT_HEAD_URL;
+  console.warn(`[Head] No match for ${setting} + ${shape}`);
+  return "";
 };
 
 type MetalColor = "white" | "rose" | "yellow";
@@ -321,17 +315,15 @@ export default function RingBuilder() {
 
     if (!iframeUrl) {
       const metalParam = encodeURIComponent(metalColor);
+      // Ensure we have valid URLs for initial load, otherwise we might load empty
+      const initialShank = shankUrl || "";
+      const initialHead = headUrl || "";
+
       setIframeUrl(
-        `${baseUrl}?shank=${shankUrl}&head=${headUrl}&metalColor=${metalParam}&carat=${carat}&matchingBand=${matchingBand}&twoTone=${twoTone}&autoRotate=${autoRotate}`,
+        `${baseUrl}?shank=${initialShank}&head=${initialHead}&metalColor=${metalParam}&carat=${carat}&matchingBand=${matchingBand}&twoTone=${twoTone}&autoRotate=${autoRotate}`,
       );
     } else {
       // Only send update if the combination is valid
-      // This prevents sending "Default Head" during the transient state where
-      // settingStyle has changed but diamondShape hasn't been auto-corrected yet.
-      // Remove blocking check to ensure Band updates (and others) are sent
-      // even if the Ring/Setting/Shape combination is transiently invalid.
-      // The viewer handles default fallbacks safely.
-      /*
       if (!isCombinationAvailable(ringStyle, settingStyle, diamondShape)) {
         console.warn(
           "[Update] Skipping update for invalid combination:",
@@ -340,7 +332,11 @@ export default function RingBuilder() {
         );
         return;
       }
-      */
+
+      if (!shankUrl || !headUrl) {
+        console.warn("[Update] Skipping update due to missing model URL");
+        return;
+      }
 
       // Send post message for instant updates
       if (iframeRef.current && iframeRef.current.contentWindow) {
